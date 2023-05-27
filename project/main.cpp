@@ -68,7 +68,7 @@ string rWANaddr;
 string rLANsubnet;
 
 // FUNCTION DECLARATIONS //
-void configureNAPT();
+void configureNAPT(); // create NAPT table
 int findEntry(string WANprt); // returns the index of the entry in the table that matches WANprt, -1 otherwise 
 int findEntry(string LANaddr, string LANprt); // returns the index of the entry in the table that matches (LANaddr, LANprt), -1 otherwise
 int getType(string sAddr, string dAddr); // compare src and dest addr to rLANsubnet, return 0 if LAN to LAN, 1 if LAN to WAN, and 2 if WAN to LAN
@@ -317,11 +317,30 @@ void parseIPPacket(const char* buffer) {
   uint16_t checksum = ntohs(ipHeader->ip_sum);
   uint8_t protocol = ipHeader->ip_p;
 
+  if (verifyChecksum(checksum, buffer, ipHeader->ip_hl * 4)) {
+    // checksum is valid
+  } else {
+    // checksum is invalid
+    // drop packet
+  }
+
   if (protocol == IPPROTO_UDP) {
     UDPPacket udpPacket = parseUDPPacket(buffer + ipHeader->ip_hl * 4);
+    if (verifyChecksum(udpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
+      // checksum is valid
+    } else {
+      // checksum is invalid
+      // drop packet
+    }
     // check what IPv4 type it is
   } else if (protocol == IPPROTO_TCP) {
     TCPPacket tcpPacket = parseTCPPacket(buffer + ipHeader->ip_hl * 4);
+    if (verifyChecksum(tcpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
+      // checksum is valid
+    } else {
+      // checksum is invalid
+      // drop packet
+    }
     // check what IPv4 type it is
   } else {
     perror("Unknown Protocol");
@@ -330,6 +349,7 @@ void parseIPPacket(const char* buffer) {
 }
 
 uint16_t calculateChecksum(const void* data, size_t length) {
+  // calculate checksum
   return 0;
 }
 
