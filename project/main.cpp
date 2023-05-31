@@ -40,10 +40,10 @@ struct NAPTEntry {
 // LAN IPs table entry 
 struct LANEntry {
   string LANaddr;
-  int LANprt;
+  int sockfd;
 
-  LANEntry(string Laddr, int Lprt) 
-    : LANaddr(Laddr), LANprt(Lprt) {}
+  LANEntry(string Laddr, int sfd) 
+    : LANaddr(Laddr), sockfd(sfd) {}
 };
 
 // UDP packet
@@ -150,6 +150,7 @@ int main() {
   FD_ZERO(&readFds);
   FD_SET(serverSocket, &readFds);
   maxSocket = serverSocket;
+  int index = 0;
 
   while (true) {
     // Copy the set of sockets to select
@@ -175,12 +176,15 @@ int main() {
       // Add the new client socket to the set
       clientSockets.push_back(clientSocket);
       FD_SET(clientSocket, &readFds);
+      // map sock fd to LAN address
+      LANtable[index].sockfd = clientSocket;
 
       // Update the maximum socket value
       if (clientSocket > maxSocket) {
         maxSocket = clientSocket;
       }
 
+      cout << LANtable[index].LANaddr << " " << LANtable[index].sockfd << endl;
       cout << "New connection, socket fd is " << clientSocket << ", IP is : " << inet_ntoa(clientAddress.sin_addr) << ", port : " << ntohs(clientAddress.sin_port) << endl;
     }
 
@@ -197,6 +201,8 @@ int main() {
         //clientSockets.erase(clientSockets.begin() + i);
       }
     }
+
+    index++;
   }
 
   // Close the server socket
@@ -208,7 +214,6 @@ int main() {
 void configureNAPT() {
   string szLine;
   int line = 1;
-  int index = 1;
 
   while (getline(cin, szLine)) {
     // first line is the router's LAN IP and the WAN IP
@@ -229,20 +234,17 @@ void configureNAPT() {
       size_t second = szLine.find(' ', first + 1); // second space char
       size_t end = szLine.size();
 
-      // extract three substrings
       string LANaddr = szLine.substr(0, first);
       string LANprt = szLine.substr(first + 1, second - first - 1);
       string WANprt = szLine.substr(second + 1, end - second - 2);
 
-      // add to NAPT table
       NAPTEntry napt(LANaddr, LANprt, WANprt);
       table.push_back(napt);
-
-      // add to LAN IP table
-      LANEntry lan(LANaddr, index);
+    }
+    // get to LAN IP section
+    else if (!szLine.empty()) {
+      LANEntry lan(szLine, 0);
       LANtable.push_back(lan);
-
-      index++;
     }
 
     line++;
@@ -255,7 +257,7 @@ void configureNAPT() {
 
   // print LAN IP table
   for (const auto& entry : LANtable) {
-    cout << entry.LANaddr << " " << entry.LANprt << endl;
+    cout << entry.LANaddr << " " << entry.sockfd << endl;
   }
 }
 
@@ -352,22 +354,9 @@ uint16_t calculateChecksum(const void* data, size_t length) {
 void forwardPacket(char* buffer, int bytesRead) {
   ip* ipHeader = reinterpret_cast<ip*>(buffer);
   char* destIp = inet_ntoa(ipHeader->ip_dst);
-  uint16_t destPort;
   --ipHeader->ip_ttl; // decrement ttl field
   ipHeader->ip_sum = 0;
   ipHeader->ip_sum = calculateChecksum(ipHeader, ipHeader->ip_hl * 4); // recalculate checksum
-
-  uint8_t protocol = ipHeader->ip_p;
-  if (protocol == IPPROTO_UDP) {
-    UDPPacket udpPacket = parseUDPPacket(buffer + ipHeader->ip_hl * 4);
-    destPort = udpPacket.destinationPort;
-  } else if (protocol == IPPROTO_TCP) {
-    TCPPacket tcpPacket = parseTCPPacket(buffer + ipHeader->ip_hl * 4);
-    destPort = tcpPacket.destinationPort;
-  } else {
-    perror("Unknown Protocol");
-    exit(1);
-  }
 
   char* ipH = reinterpret_cast<char*>(ipHeader);
   memcpy(buffer, ipH, strlen(ipH));
@@ -379,31 +368,9 @@ void forwardPacket(char* buffer, int bytesRead) {
   cout << dec << endl;
 
   // forward packet
-  int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  if (sockfd == -1) {
-    perror("Failed to create socket");
-    return;
-  }
+  LANEntry forward = LANsearch(LANtable, destIp);
+  send(forward.sockfd, buffer, bytesRead, 0);
 
-  sockaddr_in serverAddr{};
-  serverAddr.sin_family = AF_INET;
-  serverAddr.sin_port = htons(8081);
-  serverAddr.sin_addr.s_addr = INADDR_ANY; 
-
-  if (connect(sockfd, reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)) == -1) {
-    perror("Failed to connect");
-    close(sockfd);
-    return;
-  }
-
-  ssize_t numBytesSent = send(sockfd, buffer, strlen(buffer), 0);
-  if (numBytesSent == -1) {
-    perror("Failed to send message");
-    close(sockfd);
-    return;
-  }
-
-  close(sockfd);
 }
 
 void handleClient(int clientSocket) {
