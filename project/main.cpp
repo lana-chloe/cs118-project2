@@ -20,9 +20,7 @@ using namespace std;
 #define CONNECTIONS 10
 #define BUF_SIZE 1024
 
-// IPv4 packet struct
-// not sure how to implement this yet
-// should have a int type field such that:
+// IPv4 packet types
   // 0 = LAN to LAN
   // 1 = LAN to WAN
   // 2 = WAN to LAN
@@ -46,20 +44,6 @@ struct LANentry {
     : LANaddr(Laddr), sockfd(sfd) {}
 };
 
-// UDP packet
-struct UDPpacket {
-  uint16_t sourcePort;
-  uint16_t destinationPort;
-  uint16_t checksum;
-};
-
-// TCP packet
-struct TCPpacket {
-  uint16_t sourcePort;
-  uint16_t destinationPort;
-  uint16_t checksum;
-};
-
 // NAPT Table
 vector<NAPTentry> table;
 vector<LANentry> LANtable;
@@ -73,14 +57,27 @@ string rLANsubnet;
 // STRUCT FUNCTIONS //
 //////////////////////
 LANentry LANsearch(vector<LANentry>& vec, string Laddr) {
-    for (const auto& item : vec) {
-        if (item.LANaddr == Laddr) {
-            return item;
-        }
+  for (const auto& item : vec) {
+    if (item.LANaddr == Laddr) {
+      return item;
     }
+  }
 
-    // Return a default-constructed object if not found
-    exit(1);
+  perror("LANentry not found.");
+  exit(1);
+}
+
+NAPTentry NAPTsearch(vector<NAPTentry>& vec, string Laddr, int Lprt) {
+  string LANprt = to_string(Lprt);
+
+  for (const auto& item : vec) {
+    if (item.LANaddr == Laddr && item.LANprt == LANprt) {
+      return item;
+    }
+  }
+
+  perror("NAPTentry not found.");
+  exit(1);
 }
 
 ///////////////////////////
@@ -92,17 +89,12 @@ int findEntry(string WANprt); // returns the index of the entry in the table tha
 int findEntry(string LANaddr, string LANprt); // returns the index of the entry in the table that matches (LANaddr, LANprt), -1 otherwise
 int getType(string sAddr, string dAddr); // compare src and dest addr to rLANsubnet, return 0 if LAN to LAN, 1 if LAN to WAN, and 2 if WAN to LAN
 
-// processing packet
-UDPpacket parseUDPpacket(const char* buffer); 
-TCPpacket parseTCPpacket(const char* buffer);
-bool parseIPPacket(const char* buffer);
-
 // checksum
 uint16_t csum(const void* data, size_t length); // calculate checksum
 bool vCsum(uint16_t checksum, const void* data, size_t length); // verify checksum
 
 // rewriting and forwarding
-char* rewritePacket(char* buffer); 
+void rewrite(char* buffer); 
 void forward(char* buffer, int bytesRead); 
 void handleClient(int clientSocket); 
 
@@ -297,28 +289,6 @@ int getType(string sAddr, string dAddr) {
     return 2;
 }
 
-UDPpacket parseUDPpacket(const char* buffer) {
-  const udphdr* udpHeader = reinterpret_cast<const udphdr*>(buffer);
-
-  UDPpacket udpPacket;
-  udpPacket.sourcePort = ntohs(udpHeader->source);
-  udpPacket.destinationPort = ntohs(udpHeader->dest);
-  udpPacket.checksum = ntohs(udpHeader->check);
-
-  return udpPacket;
-}
-
-TCPpacket parseTCPpacket(const char* buffer) {
-  const tcphdr* tcpHeader = reinterpret_cast<const tcphdr*>(buffer);
-
-  TCPpacket tcpPacket;
-  tcpPacket.sourcePort = ntohs(tcpHeader->source);
-  tcpPacket.destinationPort = ntohs(tcpHeader->dest);
-  tcpPacket.checksum = ntohs(tcpHeader->check);
-
-  return tcpPacket;
-}
-
 uint16_t csum(const void* data, size_t length) {
   const uint16_t* buffer = static_cast<const uint16_t*>(data);
   size_t size = length;
@@ -340,8 +310,50 @@ uint16_t csum(const void* data, size_t length) {
 }
 
 bool vCsum(uint16_t checksum, const void* data, size_t length) {
-  uint16_t calculatedChecksum = csum(data, length);
-  return checksum == calculatedChecksum;
+  uint16_t check = csum(data, length);
+  return checksum == check;
+}
+
+void rewrite(char* buffer) {
+  ip* ipHeader = reinterpret_cast<ip*>(buffer);
+  char* pHeader = buffer + ipHeader->ip_hl * 4;
+  char* srcIp = inet_ntoa(ipHeader->ip_src);
+  char* destIp = inet_ntoa(ipHeader->ip_dst);
+
+  tcphdr* tcpHeader;
+  udphdr* udpHeader;
+  uint8_t protocol = ipheader->ip_p;
+  uint16_t srcPort;
+  if (protocol == IPPROTO_TCP) {
+    tcpHeader = reinterpret_cast<tcphdr*>(pHeader);
+    srcPort = ntohs(tcpHeader->source);
+  } else if (protocol == IPPROTO_UDP) {
+    udpHeader = reinterpret_cast<udphdr*>(pHeader);
+    srcPort = ntohs(udpHeader->source);
+  } 
+
+  int type = getType(srcIp, destIp);
+  switch (type) {
+    case 0: break; // LAN to LAN, no rewriting
+    case 1: { // LAN to WAN
+      NAPTentry match = NAPTsearch(srcIP, srcPort);
+      uint16_t wPort = stoi(match.WANprt);
+
+      // modify source IP/prt
+      strcpy(srcIp, rWANaddr);
+      if (protocol == IPPROTO_TCP) {
+        tcpHeader->source = htons(wPort);
+      } else if (protocol == IPPROTO_UDP) {
+        udpHeader->source = htons(wPort);
+      } 
+
+    }
+    case 2: { // WAN to LAN
+
+    }
+    default: break;
+  }
+  return;
 }
 
 void forward(char* buffer, int bytesRead) {
@@ -389,6 +401,7 @@ void handleClient(int clientSocket) {
   }
   cout << dec << endl;
 
+  rewrite(buffer);
   forward(buffer, bytesRead);
 
   //close(clientSocket);
