@@ -28,41 +28,41 @@ using namespace std;
   // 2 = WAN to LAN
 
 // NAPT table entry 
-struct NAPTEntry {
+struct NAPTentry {
   string LANaddr;
   string LANprt;
   string WANprt;
 
-  NAPTEntry(string Laddr, string Lprt, string Wprt)
+  NAPTentry(string Laddr, string Lprt, string Wprt)
     : LANaddr(Laddr), LANprt(Lprt), WANprt(Wprt) {}
 };
 
 // LAN IPs table entry 
-struct LANEntry {
+struct LANentry {
   string LANaddr;
   int sockfd;
 
-  LANEntry(string Laddr, int sfd) 
+  LANentry(string Laddr, int sfd) 
     : LANaddr(Laddr), sockfd(sfd) {}
 };
 
 // UDP packet
-struct UDPPacket {
+struct UDPpacket {
   uint16_t sourcePort;
   uint16_t destinationPort;
   uint16_t checksum;
 };
 
 // TCP packet
-struct TCPPacket {
+struct TCPpacket {
   uint16_t sourcePort;
   uint16_t destinationPort;
   uint16_t checksum;
 };
 
 // NAPT Table
-vector<NAPTEntry> table;
-vector<LANEntry> LANtable;
+vector<NAPTentry> table;
+vector<LANentry> LANtable;
 
 // original router LAN and WAN addresses
 string rLANaddr;
@@ -72,7 +72,7 @@ string rLANsubnet;
 //////////////////////
 // STRUCT FUNCTIONS //
 //////////////////////
-LANEntry LANsearch(vector<LANEntry>& vec, string Laddr) {
+LANentry LANsearch(vector<LANentry>& vec, string Laddr) {
     for (const auto& item : vec) {
         if (item.LANaddr == Laddr) {
             return item;
@@ -93,17 +93,17 @@ int findEntry(string LANaddr, string LANprt); // returns the index of the entry 
 int getType(string sAddr, string dAddr); // compare src and dest addr to rLANsubnet, return 0 if LAN to LAN, 1 if LAN to WAN, and 2 if WAN to LAN
 
 // processing packet
-UDPPacket parseUDPPacket(const char* buffer); 
-TCPPacket parseTCPPacket(const char* buffer);
+UDPpacket parseUDPpacket(const char* buffer); 
+TCPpacket parseTCPpacket(const char* buffer);
 bool parseIPPacket(const char* buffer);
 
 // checksum
-uint16_t calculateChecksum(const void* data, size_t length); 
-bool verifyChecksum(uint16_t checksum, const void* data, size_t length);
+uint16_t csum(const void* data, size_t length); // calculate checksum
+bool vCsum(uint16_t checksum, const void* data, size_t length); // verify checksum
 
 // rewriting and forwarding
 char* rewritePacket(char* buffer); 
-void forwardPacket(char* buffer, int bytesRead); 
+void forward(char* buffer, int bytesRead); 
 void handleClient(int clientSocket); 
 
 int main() {
@@ -114,18 +114,15 @@ int main() {
   struct sockaddr_in serverAddress, clientAddress;
   socklen_t clientLength;
 
-  // Create a socket
   serverSocket = socket(AF_INET, SOCK_STREAM, 0);
   if (serverSocket < 0) {
     perror("Error creating socket");
     return 1;
   }
 
-  // set SO_REUSEPORT
   int optval = 1;
   setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
 
-  // Bind the socket to a specific IP and port
   serverAddress.sin_family = AF_INET;
   serverAddress.sin_addr.s_addr = INADDR_ANY;
   serverAddress.sin_port = htons(PORT);
@@ -135,37 +132,35 @@ int main() {
     return 1;
   }
 
-  // Start listening for incoming connections
   if (listen(serverSocket, 5) < 0) {
     perror("Error listening for connections");
     return 1;
   }
 
-  cout << "Server listening on port 5152..." << endl;
+  //cout << "Server listening on port 5152..." << endl;
 
   fd_set readFds;
   vector<int> clientSockets;
 
-  // Initialize the set of client sockets
+  // initialize the set of client sockets
   FD_ZERO(&readFds);
   FD_SET(serverSocket, &readFds);
   maxSocket = serverSocket;
   int index = 0;
 
   while (true) {
-    // Copy the set of sockets to select
     fd_set tempFds = readFds;
 
-    // Call select() to monitor the sockets
+    // call select() to monitor the sockets
     activity = select(maxSocket + 1, &tempFds, nullptr, nullptr, nullptr);
     if (activity < 0) {
       perror("Error in select");
       return 1;
     }
 
-    // Check for activity on the server socket
+    // check for activity on the server socket
     if (FD_ISSET(serverSocket, &tempFds)) {
-      // Accept incoming connections
+      // accept incoming connections
       clientLength = sizeof(clientAddress);
       clientSocket = accept(serverSocket, (struct sockaddr*)&clientAddress, &clientLength);
       if (clientSocket < 0) {
@@ -173,19 +168,18 @@ int main() {
         continue;
       }
 
-      // Add the new client socket to the set
+      // add the new client socket to the set
       clientSockets.push_back(clientSocket);
       FD_SET(clientSocket, &readFds);
-      // map sock fd to LAN address
-      LANtable[index].sockfd = clientSocket;
+      LANtable[index].sockfd = clientSocket; // map sock fd to LAN address
 
-      // Update the maximum socket value
+      // update the maximum socket value
       if (clientSocket > maxSocket) {
         maxSocket = clientSocket;
       }
 
       cout << LANtable[index].LANaddr << " " << LANtable[index].sockfd << endl;
-      cout << "New connection, socket fd is " << clientSocket << ", IP is : " << inet_ntoa(clientAddress.sin_addr) << ", port : " << ntohs(clientAddress.sin_port) << endl;
+      //cout << "New connection, socket fd is " << clientSocket << ", IP is : " << inet_ntoa(clientAddress.sin_addr) << ", port : " << ntohs(clientAddress.sin_port) << endl;
     }
 
     // Check for activity on client sockets
@@ -196,7 +190,7 @@ int main() {
         // Handle data from the client
         handleClient(socketFd);
 
-        // Remove the client socket from the set
+        // remove the client socket from the set
         //FD_CLR(socketFd, &readFds);
         //clientSockets.erase(clientSockets.begin() + i);
       }
@@ -205,7 +199,6 @@ int main() {
     index++;
   }
 
-  // Close the server socket
   close(serverSocket);
 
   return 0;
@@ -222,7 +215,7 @@ void configureNAPT() {
       rLANaddr = szLine.substr(0, dwPos);
       rWANaddr = szLine.substr(dwPos + 1);
 
-      //After getting router's LAN IP, set rLANsubnet to the first 3 bytes of rLANaddr:
+      // after getting router's LAN IP, set rLANsubnet to the first 3 bytes of rLANaddr:
       size_t firstdot = rLANaddr.find('.'); // first . char
       size_t seconddot = rLANaddr.find('.', firstdot + 1); // second . char
       size_t thirddot = rLANaddr.find('.', seconddot + 1); // third . char
@@ -238,12 +231,12 @@ void configureNAPT() {
       string LANprt = szLine.substr(first + 1, second - first - 1);
       string WANprt = szLine.substr(second + 1, end - second - 2);
 
-      NAPTEntry napt(LANaddr, LANprt, WANprt);
+      NAPTentry napt(LANaddr, LANprt, WANprt);
       table.push_back(napt);
     }
     // get to LAN IP section
     else if (!szLine.empty()) {
-      LANEntry lan(szLine, 0);
+      LANentry lan(szLine, 0);
       LANtable.push_back(lan);
     }
 
@@ -253,11 +246,6 @@ void configureNAPT() {
   // print NAPT table
   for (const auto& entry : table) {
     cout << entry.LANaddr << " " << entry.LANprt << " " << entry.WANprt << endl;
-  }
-
-  // print LAN IP table
-  for (const auto& entry : LANtable) {
-    cout << entry.LANaddr << " " << entry.sockfd << endl;
   }
 }
 
@@ -309,10 +297,10 @@ int getType(string sAddr, string dAddr) {
     return 2;
 }
 
-UDPPacket parseUDPPacket(const char* buffer) {
+UDPpacket parseUDPpacket(const char* buffer) {
   const udphdr* udpHeader = reinterpret_cast<const udphdr*>(buffer);
 
-  UDPPacket udpPacket;
+  UDPpacket udpPacket;
   udpPacket.sourcePort = ntohs(udpHeader->source);
   udpPacket.destinationPort = ntohs(udpHeader->dest);
   udpPacket.checksum = ntohs(udpHeader->check);
@@ -320,10 +308,10 @@ UDPPacket parseUDPPacket(const char* buffer) {
   return udpPacket;
 }
 
-TCPPacket parseTCPPacket(const char* buffer) {
+TCPpacket parseTCPpacket(const char* buffer) {
   const tcphdr* tcpHeader = reinterpret_cast<const tcphdr*>(buffer);
 
-  TCPPacket tcpPacket;
+  TCPpacket tcpPacket;
   tcpPacket.sourcePort = ntohs(tcpHeader->source);
   tcpPacket.destinationPort = ntohs(tcpHeader->dest);
   tcpPacket.checksum = ntohs(tcpHeader->check);
@@ -331,7 +319,7 @@ TCPPacket parseTCPPacket(const char* buffer) {
   return tcpPacket;
 }
 
-uint16_t calculateChecksum(const void* data, size_t length) {
+uint16_t csum(const void* data, size_t length) {
   const uint16_t* buffer = static_cast<const uint16_t*>(data);
   size_t size = length;
   uint32_t sum = 0;
@@ -351,12 +339,17 @@ uint16_t calculateChecksum(const void* data, size_t length) {
   return static_cast<uint16_t>(~sum);
 }
 
-void forwardPacket(char* buffer, int bytesRead) {
+bool vCsum(uint16_t checksum, const void* data, size_t length) {
+  uint16_t calculatedChecksum = csum(data, length);
+  return checksum == calculatedChecksum;
+}
+
+void forward(char* buffer, int bytesRead) {
   ip* ipHeader = reinterpret_cast<ip*>(buffer);
   char* destIp = inet_ntoa(ipHeader->ip_dst);
   --ipHeader->ip_ttl; // decrement ttl field
   ipHeader->ip_sum = 0;
-  ipHeader->ip_sum = calculateChecksum(ipHeader, ipHeader->ip_hl * 4); // recalculate checksum
+  ipHeader->ip_sum = csum(ipHeader, ipHeader->ip_hl * 4); // recalculate checksum
 
   char* ipH = reinterpret_cast<char*>(ipHeader);
   memcpy(buffer, ipH, strlen(ipH));
@@ -368,9 +361,8 @@ void forwardPacket(char* buffer, int bytesRead) {
   cout << dec << endl;
 
   // forward packet
-  LANEntry forward = LANsearch(LANtable, destIp);
+  LANentry forward = LANsearch(LANtable, destIp);
   send(forward.sockfd, buffer, bytesRead, 0);
-
 }
 
 void handleClient(int clientSocket) {
@@ -385,20 +377,19 @@ void handleClient(int clientSocket) {
     return;
   }
   if (bytesRead == 0) {
-    // Client disconnected
+    // client disconnected
     //close(clientSocket);
     return;
   }
 
   buffer[bytesRead] = '\0';
 
-  // SEND (hex)
   for (int i = 0; i < bytesRead; ++i) {
     cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
   }
   cout << dec << endl;
 
-  forwardPacket(buffer, bytesRead);
+  forward(buffer, bytesRead);
 
   //close(clientSocket);
 }
