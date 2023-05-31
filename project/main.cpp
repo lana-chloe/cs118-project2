@@ -74,10 +74,12 @@ int findEntry(string LANaddr, string LANprt); // returns the index of the entry 
 int getType(string sAddr, string dAddr); // compare src and dest addr to rLANsubnet, return 0 if LAN to LAN, 1 if LAN to WAN, and 2 if WAN to LAN
 UDPPacket parseUDPPacket(const char* buffer); // parse UDP packet
 TCPPacket parseTCPPacket(const char* buffer); // parse TCP packet
-void parseIPPacket(const char* buffer); // parse IP packet
+bool parseIPPacket(const char* buffer); // parse IP packet
 uint16_t calculateChecksum(const void* data, size_t length); // calculate checksum
 bool verifyChecksum(uint16_t checksum, const void* data, size_t length); // compare calculated checksum with checksum field
-int handleClient(int clientSocket); // get message from client socket
+char* rewritePacket(char* buffer); // rewrite packet
+void forwardPacket(const char* buffer); // forward packet
+bool handleClient(int clientSocket); // get message from client socket
 
 int main() {
   // configure NAPT table
@@ -181,7 +183,7 @@ int main() {
       int socketFd = clientSockets[i];
 
       if (FD_ISSET(socketFd, &tempFds)) {
-        if(handleClient(socketFd) == 1) {
+        if(!handleClient(socketFd)) {
           // remove the client socket from the set
           FD_CLR(socketFd, &readFds);
           clientSockets.erase(clientSockets.begin() + i);
@@ -259,6 +261,7 @@ int findEntry(string LANaddr, string LANprt) {
 }
 
 // NOTE: no checking of whether addresses are valid; classify an address as LAN if the 1st three bytes match rLANsubnet, classify as WAN otherwise
+// IMPLEMENT CHECK!!!
 int getType(string sAddr, string dAddr) { 
   size_t firstdot = sAddr.find('.'); // first . char
   size_t seconddot = sAddr.find('.', firstdot + 1); // second . char
@@ -309,7 +312,7 @@ TCPPacket parseTCPPacket(const char* buffer) {
   return tcpPacket;
 }
 
-void parseIPPacket(const char* buffer) {
+bool parseIPPacket(const char* buffer) {
   const ip* ipHeader = reinterpret_cast<const ip*>(buffer);
 
   string sourceIP = inet_ntoa(ipHeader->ip_src);
@@ -317,40 +320,45 @@ void parseIPPacket(const char* buffer) {
   uint16_t checksum = ntohs(ipHeader->ip_sum);
   uint8_t protocol = ipHeader->ip_p;
 
-  if (verifyChecksum(checksum, buffer, ipHeader->ip_hl * 4)) {
-    // checksum is valid
-  } else {
-    // checksum is invalid
-    // drop packet
-  }
+  if (!verifyChecksum(checksum, buffer, ipHeader->ip_hl * 4)) 
+    return false;
 
   if (protocol == IPPROTO_UDP) {
     UDPPacket udpPacket = parseUDPPacket(buffer + ipHeader->ip_hl * 4);
-    if (verifyChecksum(udpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
-      // checksum is valid
-    } else {
-      // checksum is invalid
-      // drop packet
+    if (!verifyChecksum(udpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
+      return false;
     }
-    // check what IPv4 type it is
   } else if (protocol == IPPROTO_TCP) {
     TCPPacket tcpPacket = parseTCPPacket(buffer + ipHeader->ip_hl * 4);
-    if (verifyChecksum(tcpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
-      // checksum is valid
-    } else {
-      // checksum is invalid
-      // drop packet
+    if (!verifyChecksum(tcpPacket.checksum, buffer + ipHeader->ip_hl * 4, ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4)) {
+      return false;
     }
-    // check what IPv4 type it is
   } else {
     perror("Unknown Protocol");
     exit(1);
   }
+  
+  return true;
 }
 
 uint16_t calculateChecksum(const void* data, size_t length) {
-  // calculate checksum
-  return 0;
+  const uint16_t* buffer = static_cast<const uint16_t*>(data);
+  size_t size = length;
+  uint32_t sum = 0;
+
+  while (size > 1) {
+    sum += *buffer++;
+    size -= sizeof(uint16_t);
+  }
+  if (size == 1) {
+    uint16_t value = *(reinterpret_cast<const uint8_t*>(buffer));
+    sum += value;
+  }
+  while (sum >> 16) {
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  }
+
+  return static_cast<uint16_t>(~sum);
 }
 
 bool verifyChecksum(uint16_t checksum, const void* data, size_t length) {
@@ -358,7 +366,74 @@ bool verifyChecksum(uint16_t checksum, const void* data, size_t length) {
   return checksum == calculatedChecksum;
 }
 
-int handleClient(int clientSocket) {
+char* rewritePacket(char* buffer) {
+  const ip* ipHeader = reinterpret_cast<const ip*>(buffer);
+  string sourceIP = inet_ntoa(ipHeader->ip_src);
+  string destinationIP = inet_ntoa(ipHeader->ip_dst);
+
+  switch (getType(sourceIP, destinationIP)) {
+    case 0: { // LAN to LAN
+      return buffer;
+    }
+    case 1: { // LAN to WAN
+
+    }
+    case 2: { // WAN to LAN
+
+    }
+    default: return NULL; // invalid address
+  }
+}
+
+void forwardPacket(const char* buffer) {
+  const ip* ipHeader = reinterpret_cast<const ip*>(buffer);
+  char* destIp = inet_ntoa(ipHeader->ip_dst);
+  uint16_t destPort;
+
+  uint8_t protocol = ipHeader->ip_p;
+  if (protocol == IPPROTO_UDP) {
+    UDPPacket udpPacket = parseUDPPacket(buffer + ipHeader->ip_hl * 4);
+    destPort = udpPacket.destinationPort;
+    
+  } else if (protocol == IPPROTO_TCP) {
+    TCPPacket tcpPacket = parseTCPPacket(buffer + ipHeader->ip_hl * 4);
+    destPort = tcpPacket.destinationPort;
+  } else {
+    perror("Unknown Protocol");
+    exit(1);
+  }
+
+  // set up connection with destination IP and port
+  int forwardSocket = socket(AF_INET, SOCK_STREAM, 0);
+  if (forwardSocket < 0) {
+      perror("Error creating forward socket.");
+      exit(1);
+  }
+  
+  struct sockaddr_in destAddr;
+  destAddr.sin_family = AF_INET;
+  destAddr.sin_port = htons(destPort);
+  if (inet_pton(AF_INET, destIp, &(destAddr.sin_addr)) <= 0) {
+      perror("Invalid destination IP address.");
+      exit(1);
+  }
+
+  if (connect(forwardSocket, (struct sockaddr *)&destAddr, sizeof(destAddr)) < 0) {
+      perror("Error connecting to destination.");
+      exit(1);
+  }
+ 
+  // forward packet
+  ssize_t bytesSent = send(forwardSocket, buffer, strlen(buffer), 0);
+  if (bytesSent < 0) {
+      perror("Error forwarding packet.");
+      exit(1);
+  }
+
+  close(forwardSocket);
+}
+
+bool handleClient(int clientSocket) {
   char buffer[BUF_SIZE];
   int bytesRead;
 
@@ -367,20 +442,30 @@ int handleClient(int clientSocket) {
   if (bytesRead < 0) {
     perror("Error reading from socket");
     close(clientSocket);
-    return 1;
+    exit(1);
   }
-
   if (bytesRead == 0) {
     // client disconnected
     close(clientSocket);
-    return 1;
+    return false;
   }
 
   buffer[bytesRead] = '\0';
 
   cout << "Received message:\n" << buffer << endl;
-  
-  parseIPPacket(buffer);
 
-  return 0;
+  forwardPacket(buffer);
+  
+  /*
+  if (parseIPPacket(buffer)) { // checksum
+    char* tmp = rewritePacket(buffer); // rewrite packet
+    if (tmp != NULL) {
+      char packet[1024];
+      strcpy(packet, tmp);
+      // forward packet
+    }
+  } else return false;
+  */
+
+  return true;
 }
