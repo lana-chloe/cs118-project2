@@ -322,7 +322,7 @@ void rewrite(char* buffer) {
 
   tcphdr* tcpHeader;
   udphdr* udpHeader;
-  uint8_t protocol = ipheader->ip_p;
+  uint8_t protocol = ipHeader->ip_p;
   uint16_t srcPort;
   if (protocol == IPPROTO_TCP) {
     tcpHeader = reinterpret_cast<tcphdr*>(pHeader);
@@ -336,23 +336,40 @@ void rewrite(char* buffer) {
   switch (type) {
     case 0: break; // LAN to LAN, no rewriting
     case 1: { // LAN to WAN
-      NAPTentry match = NAPTsearch(srcIP, srcPort);
+      NAPTentry match = NAPTsearch(table, srcIp, srcPort);
       uint16_t wPort = stoi(match.WANprt);
 
-      // modify source IP/prt
-      strcpy(srcIp, rWANaddr);
+      // modify source IP in IP header
+      strcpy(srcIp, rWANaddr.c_str());
+
+      // modify source port and recalculate checksum in protcol header
       if (protocol == IPPROTO_TCP) {
         tcpHeader->source = htons(wPort);
+        int tcpLength = ntohs(ipHeader->ip_len) - (ipHeader->ip_hl * 4);
+        tcpHeader->check = 0;
+        tcpHeader->check = csum(buffer + (ipHeader->ip_hl * 4), tcpLength);
       } else if (protocol == IPPROTO_UDP) {
         udpHeader->source = htons(wPort);
+        int udpLength = ntohs(udpHeader->len);
+        udpHeader->check = 0;
+        udpHeader->check = csum(buffer + (ipHeader->ip_hl * 4), udpLength);
       } 
 
+      // recalculate IP checksum
+      ipHeader->ip_sum = 0;
+      ipHeader->ip_sum = csum(buffer, ipHeader->ip_hl * 4);
     }
     case 2: { // WAN to LAN
 
     }
     default: break;
   }
+  int length = sizeof(buffer) - 1;
+  for (int i = 0; i < length; ++i) {
+    cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
+  }
+  cout << dec << endl;
+
   return;
 }
 
