@@ -133,10 +133,33 @@ python3 grader/packet_generate.py < scenarios/setting1.json
 - The autograder will only build your program in the `project` folder, and grade the built `server` executable.
   Your program should not depend on other files to run.
 
-## TODO
+## Summary
 
-    ###########################################################
-    ##                                                       ##
-    ## REPLACE CONTENT OF THIS FILE WITH YOUR PROJECT REPORT ##
-    ##                                                       ##
-    ###########################################################
+**Group Members**: Lana Lim (105817312), Samantha Rafter (505577796), Tomas Kaljevic (105535812)
+
+### Specifications
+
+A NAPT router is simulated over TCP connections using BSD socket programming. The program first accepts input to stdin specifying the router’s LAN and WAN IP addresses, the IP addresses of hosts on the network, and a list of static NAPT table entries.
+
+Two vectors are created to track the NAPT configuration and information for forwarding to the correct port over TCP. The NAPT vector contains items mapping an IP address and LAN port to a WAN port. The forwarding table (called LANtable) maps the IP addresses of the WAN port and the local hosts to the corresponding fd for TCP forwarding.
+
+After this setup, a socket is opened to listen on port 5152, and the select() function from the BSD sockets API is used to handle clients in order. A while loop runs indefinitely, and on each iteration, will accept any incoming connections and add the file descriptor to a vector tracking the client sockets. If activity on a socket is detected, the client will be handled.
+
+With client handling, up to 65536 (max. length of an IP packet) bytes are read into a buffer. This buffer is then parsed into an IPv4 header and transport layer (determined by the protocol field of the IP header) header. These are both checked for errors in the checksums, and if TTL < 0, and dropped if either of these is true. If TTL > 0 and the checksums are correct, the buffer is rewritten then forwarded.
+
+Rewriting is handled by again parsing the buffer as an IPv4 header, and first decrementing the TTL field. The type of connection (LAN to LAN/ LAN to WAN/ WAN to LAN) is then found. For LAN to LAN, the checksum is recalculated with the new TTL and the packet is forwarded. For LAN to WAN, if the connection being made is not already in the NAPT table, a new translation is added. The source IP and port are then changed to their WAN counterparts, the IP and transport layer checksums are recalculated, and the packet is forwarded. For WAN to LAN, the packet is dropped if not present in the NAPT table. Otherwise, the destination IP and port are rewritten to the LAN counterparts, the IP and transport checksums are recalculated, and the packet is forwarded. 
+
+Forwarding is achieved by finding the fd corresponding to the packet’s IP address, and then writing the packet to this fd.
+
+### Issues
+
+The main problem faced was in understanding the logic in running IP over TCP. While the IP logic was similar to the way an actual NAPT router would work, knowing where to send information in TCP (since this is a simulation) was more difficult. The solution was found by printing the file descriptors and source IP addresses (parsed from the IPv4 header read into the buffer) every time a connection was made. From interpreting this, we discovered the need for a separate table to map these two variables and the order in which to do so.
+
+### Acknowledgments
+
+* [<netinet/ip.h> source and fields](https://sites.uclouvain.be/SystInfo/usr/include/netinet/ip.h.html)
+* [<netinet/tcp.h> source and fields](https://sites.uclouvain.be/SystInfo/usr/include/netinet/tcp.h.html)
+* [<netinet/udp.h> source and fields](https://sites.uclouvain.be/SystInfo/usr/include/netinet/udp.h.html)
+* [<sys/select.h> man page](https://man7.org/linux/man-pages/man2/select.2.html)
+* [Guide to Network Programming Using Sockets checksum calculation](https://beej.us/guide/bgnet0/html/split/project-validating-a-tcp-packet.html#the-tcp-header-checksum)
+* [TA Boyan's sample starter code](https://github.com/dboyan/CS118-S23-1A/blob/main/Week%207/select.c)
