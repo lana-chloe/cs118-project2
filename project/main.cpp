@@ -57,6 +57,9 @@ string rLANaddr;
 string rWANaddr;
 string rLANsubnet;
 
+// port indexing for dynamic NAPT
+int indexPort = 49152;
+
 //////////////////////
 // STRUCT FUNCTIONS //
 //////////////////////
@@ -104,7 +107,7 @@ uint16_t cTsum(const ip* ipHeader, const tcphdr* tcpHeader, const char* payload,
 uint16_t cUsum(const ip* ipHeader, const udphdr* udpHeader, const char* payload, size_t payloadLength); // calculate UDP checksum
 
 // rewriting and forwarding
-void rewrite(char* buffer); 
+bool rewrite(char* buffer); 
 void forward(char* buffer, int bytesRead); 
 void handleClient(int clientSocket); 
 
@@ -414,17 +417,8 @@ uint16_t cUsum(const ip* ipHeader, const udphdr* udpHeader, const char* payload,
   return static_cast<uint16_t>(~sum);
 }
 
-void rewrite(char* buffer) {
+bool rewrite(char* buffer) {
   ip* ipHeader = reinterpret_cast<ip*>(buffer);
-
-  cout << "IP header: " << endl;
-  char* tmp = reinterpret_cast<char*>(ipHeader);
-  for (int i = 0; i < sizeof(ip); ++i) {
-    cout << hex << setw(2) << setfill('0') << (static_cast<int>(tmp[i]) & 0xFF) << " ";
-  }
-  cout << dec << endl;
-
-
   char* pHeader = buffer + ipHeader->ip_hl * 4;
   string srcIp = inet_ntoa(ipHeader->ip_src);
   string destIp = inet_ntoa(ipHeader->ip_dst);
@@ -446,10 +440,15 @@ void rewrite(char* buffer) {
 
   int type = getType(srcIp, destIp);
   switch (type) {
-    case 0: return; // LAN to LAN, no rewriting
+    case 0: return true; // LAN to LAN, no rewriting
     case 1: { // LAN to WAN
       // find LAN to WAN translation
       NAPTentry match = searchLW(srcIp, srcPort);
+      if (match.LANaddr == "" && match.LANprt == "" && match.WANprt == "") { // no match, is not in NAPT table yet
+        match = NAPTentry(srcIp, to_string(srcPort), to_string(indexPort));
+        table.push_back(match);
+        indexPort++;
+      }
       uint16_t wPort = stoi(match.WANprt);
 
       // modify source IP
@@ -473,8 +472,10 @@ void rewrite(char* buffer) {
       break;
     }
     case 2: { // WAN to LAN
-      // STATIC NAPT
       NAPTentry match = searchWL(destPort);
+      if (match.LANaddr == "" && match.LANprt == "" && match.WANprt == "") { // no match, is not in NAPT table yet
+        return false;
+      }
       string dIp = match.LANaddr;
       uint16_t dP = stoi(match.LANprt);
 
@@ -524,8 +525,8 @@ void rewrite(char* buffer) {
     cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
   }
   cout << dec << endl;
-
-  return;
+  
+  return true;
 }
 
 void forward(char* buffer, int bytesRead) {
@@ -588,15 +589,17 @@ void handleClient(int clientSocket) {
   }
   cout << dec << endl;
 
-  rewrite(buffer);
+  if (rewrite(buffer)) {
+    cout << "After rewrite:" << endl;
+    for (int i = 0; i < bytesRead; ++i) {
+      cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
+    }
+    cout << dec << endl;
 
-  cout << "After rewrite:" << endl;
-  for (int i = 0; i < bytesRead; ++i) {
-    cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
+    forward(buffer, bytesRead);
+  } else {
+    cout << "Packet dropped." << endl;
   }
-  cout << dec << endl;
-
-  forward(buffer, bytesRead);
-
+  cout << "======================" <<endl;
   //close(clientSocket);
 }
