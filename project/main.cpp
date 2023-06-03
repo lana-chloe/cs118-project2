@@ -106,7 +106,8 @@ uint16_t csum(const void* data, size_t length); // calculate IP checksum
 uint16_t cTsum(const ip* ipHeader, const tcphdr* tcpHeader, const char* payload, size_t payloadLength); // calculate TCP checksum
 uint16_t cUsum(const ip* ipHeader, const udphdr* udpHeader, const char* payload, size_t payloadLength); // calculate UDP checksum
 
-// rewriting and forwarding
+// processing the packet
+bool check(char* buffer);
 bool rewrite(char* buffer); 
 void forward(char* buffer, int bytesRead); 
 void handleClient(int clientSocket); 
@@ -417,6 +418,51 @@ uint16_t cUsum(const ip* ipHeader, const udphdr* udpHeader, const char* payload,
   return static_cast<uint16_t>(~sum);
 }
 
+bool check(char* buffer) {
+  ip* ipHeader = reinterpret_cast<ip*>(buffer);
+  char* pHeader = buffer + ipHeader->ip_hl * 4;
+  uint8_t protocol = ipHeader->ip_p;
+  tcphdr* tcpHeader;
+  udphdr* udpHeader;
+
+  // verify ttl
+  if (ipHeader->ip_ttl == 0 || ipHeader->ip_ttl == 1) {
+    return false;
+  }
+  // verify checksums
+  uint16_t checksum;
+  uint16_t check;
+  // verify IP checksum
+  checksum = ipHeader->ip_sum;
+  cout << checksum << endl;
+  ipHeader->ip_sum = 0;
+  check =  csum(ipHeader, ipHeader->ip_hl * 4);
+  cout << check << endl;
+  if (checksum != check) 
+    return false;
+  ipHeader->ip_sum = checksum; // revert to original checksum
+
+  // verify protocol checksum
+  if (protocol == IPPROTO_TCP) {
+    tcpHeader = reinterpret_cast<tcphdr*>(pHeader);
+    checksum = tcpHeader->check;
+    tcpHeader->check = 0;
+    check = cTsum(ipHeader, tcpHeader, buffer + ipHeader->ip_hl * 4 + sizeof(tcphdr), ntohs(ipHeader->ip_len) - ipHeader->ip_hl * 4 - sizeof(tcphdr));
+    if (checksum != check)
+      return false;
+    tcpHeader->check = checksum;
+  } else if (protocol == IPPROTO_UDP) {
+    udpHeader = reinterpret_cast<udphdr*>(pHeader);
+    checksum = udpHeader->check;
+    udpHeader->check = 0;
+    check = cUsum(ipHeader, udpHeader, buffer + ipHeader->ip_hl * 4 + sizeof(udphdr), ntohs(udpHeader->len) - sizeof(udphdr));
+    if (checksum != check) 
+      return false;
+    udpHeader->check = checksum;
+  } 
+  return true;
+}
+
 bool rewrite(char* buffer) {
   ip* ipHeader = reinterpret_cast<ip*>(buffer);
   char* pHeader = buffer + ipHeader->ip_hl * 4;
@@ -589,17 +635,20 @@ void handleClient(int clientSocket) {
   }
   cout << dec << endl;
 
-  if (rewrite(buffer)) {
+  if (check(buffer)) {
+    if (rewrite(buffer)) {
     cout << "After rewrite:" << endl;
     for (int i = 0; i < bytesRead; ++i) {
       cout << hex << setw(2) << setfill('0') << (static_cast<int>(buffer[i]) & 0xFF) << " ";
     }
     cout << dec << endl;
-
     forward(buffer, bytesRead);
+    } else {
+      cout << "Packet dropped." << endl;
+    }
   } else {
     cout << "Packet dropped." << endl;
   }
+
   cout << "======================" <<endl;
-  //close(clientSocket);
 }
