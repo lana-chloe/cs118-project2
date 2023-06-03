@@ -100,6 +100,7 @@ int getType(string sAddr, string dAddr); // compare src and dest addr to rLANsub
 
 // checksum
 uint16_t csum(const void* data, size_t length); // calculate IP checksum
+uint16_t cTsum(const ip* ipHeader, const tcphdr* tcpHeader, const char* payload, size_t payloadLength); // calculate TCP checksum
 uint16_t cUsum(const ip* ipHeader, const udphdr* udpHeader, const char* payload, size_t payloadLength); // calculate UDP checksum
 bool vCsum(uint16_t checksum, const void* data, size_t length); // verify checksum
 
