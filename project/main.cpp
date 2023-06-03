@@ -18,7 +18,7 @@ using namespace std;
 
 #define PORT 5152
 #define CONNECTIONS 10
-#define BUF_SIZE 1024
+#define BUF_SIZE 65536
 
 // IPv4 packet types
   // 0 = LAN to LAN
